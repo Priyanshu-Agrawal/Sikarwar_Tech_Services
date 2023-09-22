@@ -1,0 +1,117 @@
+  #YML
+name: Build and Release Debug APK
+
+on:
+  push:
+    branches:
+      - '*'
+  pull_request:
+    branches:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    env:
+      JAVA_VERSION: 17
+      distribution: 'temurin'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: '${{ env.JAVA_VERSION }}'
+          distribution: '${{ env.distribution }}'
+          cache: gradle
+
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+
+
+      - name: Update Secrets.txt with GitHub secrets and rename to Secrets.java
+        env:
+          SECRETFILE: app/src/main/java/com/example/sikarwartechservices/Constants/Secrets.java
+          USERNAME: ${{ secrets.USERNAME }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          DBSERVERIP: ${{ secrets.DBSERVERIP }}
+          PORTNO: ${{ secrets.PORTNO }}
+          TESTDATABASENAME: ${{ secrets.TESTDATABASENAME }}
+          PRODUCTIONDATABASENAME: ${{ secrets.PRODUCTIONDATABASENAME }}
+          LOGINPROCEDURENAME: ${{ secrets.LOGINPROCEDURENAME }}
+        run: |
+          echo "package com.example.sikarwartechservices.Constants;" > ${{env.SECRETFILE}}
+          echo "public interface Secrets {" >> ${{env.SECRETFILE}}
+          echo "    String userName = \"${{env.USERNAME}}\";" >> ${{env.SECRETFILE}}
+          echo "    String password = \"${{env.PASSWORD}}\";" >> ${{env.SECRETFILE}}
+          echo "    String DBServerIP = \"${{env.DBSERVERIP}}\";" >> ${{env.SECRETFILE}}
+          echo "    String portNo = \"${{env.PORTNO}}\";" >> ${{env.SECRETFILE}}
+          echo "    String testDatabaseName = \"${{env.TESTDATABASENAME}}\";" >> ${{env.SECRETFILE}}
+          echo "    String productionDatabaseName = \"${{env.PRODUCTIONDATABASENAME}}\";" >> ${{env.SECRETFILE}}
+          echo "    String loginProcedureName = \"${{env.LOGINPROCEDURENAME}}\";" >> ${{env.SECRETFILE}}
+          echo "}" >> ${{env.SECRETFILE}}
+          mv app/src/main/java/com/example/sikarwartechservices/Constants/Secrets.txt ${{env.SECRETFILE}}
+
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      # - name: Build Release APK
+      #   run: ./gradlew assembleRelease
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACCESSTOKEN }}
+        with:
+          tag_name: ${{ format('{0}-{1}', 'debug', github.run_number) }}
+          release_name: Debug APK Release
+          draft: false
+          prerelease: false
+
+      - name: Handle Existing Release
+        id: handle_existing_release
+        run: |
+          if [ "${{ steps.create_release.outputs.status }}" == 'failure' ]; then
+            echo "Tag name already exists. Creating a new release with an incremented tag name."
+            i=1
+            while true; do
+              new_tag_name="${{ format('{0}-{1}', 'debug', github.run_number) }}_${i}"
+              echo "Trying tag name: $new_tag_name"
+              if ! git rev-parse --verify "refs/tags/$new_tag_name" >/dev/null 2>&1; then
+                echo "Creating release with tag name: $new_tag_name"
+                echo "::set-output name=tag_name::$new_tag_name"
+                break
+              fi
+              i=$((i+1))
+            done
+          else
+            echo "::set-output name=tag_name::${{ steps.create_release.outputs.tag_name }}"
+          fi
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v2
+        with:
+          name: debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      # - name: Upload Release APK
+      #   uses: actions/upload-artifact@v2
+      #   with:
+      #     name: release-apk
+      #     path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Attach APK to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACCESSTOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk
+          asset_name: ${{ steps.handle_existing_release.outputs.tag_name }}-debug.apk
+          asset_content_type: application/vnd.android.package-archive
